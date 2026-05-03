@@ -112,6 +112,54 @@ class GamesIOTests(unittest.TestCase):
         self.assertEqual(meta["game_counts"]["valorant"], 1)
         self.assertEqual(meta["game_counts"]["cs2"], 1)
 
+    def test_progress_callback_fires_per_game(self):
+        profile_path = self.root / "out" / "progress.json"
+        events: list = []
+
+        def progress(stage, key, idx, total):
+            events.append((stage, key, idx, total))
+
+        profiles_mod.save_profile(
+            profile_path, selected_games=["valorant", "cs2"], progress=progress
+        )
+        # Expect: start -> game(valorant,1,2) -> game(cs2,2,2) -> done
+        self.assertEqual(events[0], ("start", "", 0, 2))
+        self.assertEqual(events[-1], ("done", "", 2, 2))
+        game_events = [e for e in events if e[0] == "game"]
+        self.assertEqual(len(game_events), 2)
+        self.assertEqual(game_events[0][1], "valorant")
+        self.assertEqual(game_events[0][2:], (1, 2))
+        self.assertEqual(game_events[1][1], "cs2")
+        self.assertEqual(game_events[1][2:], (2, 2))
+
+    def test_log_callback_announces_each_file(self):
+        profile_path = self.root / "out" / "log.json"
+        lines: list = []
+        profiles_mod.save_profile(
+            profile_path, selected_games=["valorant"], log=lines.append
+        )
+        joined = "\n".join(lines)
+        self.assertIn("Taking Valorant settings", joined)
+        self.assertIn("saving GameUserSettings.ini", joined)
+        self.assertIn("captured 1 file(s) from Valorant", joined)
+
+    def test_apply_progress_and_log(self):
+        profile_path = self.root / "out" / "applylog.json"
+        profiles_mod.save_profile(profile_path, selected_games=["valorant"])
+
+        events: list = []
+        lines: list = []
+        profiles_mod.apply_profile(
+            profile_path, log=lines.append,
+            progress=lambda *a: events.append(a),
+            make_backup=False,
+        )
+        joined = "\n".join(lines)
+        self.assertIn("Applying Valorant settings", joined)
+        self.assertIn("applied GameUserSettings.ini", joined)
+        self.assertEqual(events[0][0], "start")
+        self.assertEqual(events[-1][0], "done")
+
 
 class ProfilePathTests(unittest.TestCase):
     def test_safe_name_strips_bad_chars(self):

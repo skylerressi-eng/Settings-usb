@@ -14,7 +14,15 @@ import re
 import string
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
+
+ProgressCb = Callable[[str, str, int, int], None]
+"""Called as ``progress(stage, game_key, index, total)``.
+
+``stage`` is one of ``"start"``, ``"game"``, or ``"done"``. ``game_key`` is the
+key currently being processed (empty for ``start``/``done``). ``index`` is the
+1-based position; ``total`` is the total number of games for the run.
+"""
 
 from . import games as games_mod
 
@@ -95,6 +103,7 @@ def save_profile(
     path: Path,
     selected_games: Optional[Iterable[str]] = None,
     log: Optional[Callable[[str], None]] = None,
+    progress: Optional[ProgressCb] = None,
 ) -> Path:
     """Read selected (or all detected) games' configs and save a JSON profile."""
     detected = games_mod.detect_games()
@@ -102,28 +111,36 @@ def save_profile(
         wanted = set(selected_games)
         detected = [g for g in detected if g.key in wanted]
 
-    profile: Dict[str, object] = {
+    total = len(detected)
+    if progress:
+        progress("start", "", 0, total)
+
+    profile: Dict[str, Any] = {
         "version": PROFILE_VERSION,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "host": platform.node(),
         "games": {},
     }
-    games_block: Dict[str, dict] = profile["games"]  # type: ignore[assignment]
+    games_block: Dict[str, dict] = profile["games"]
 
-    for game in detected:
+    for index, game in enumerate(detected, start=1):
+        if progress:
+            progress("game", game.key, index, total)
         if log:
-            log(f"  reading {game.display_name}...")
+            log(f"-> Taking {game.display_name} settings...")
         files = games_mod.read_game_configs(game.key, log=log)
         games_block[game.key] = {
             "display_name": game.display_name,
             "files": files,
         }
         if log:
-            log(f"    captured {len(files)} file(s)")
+            log(f"   captured {len(files)} file(s) from {game.display_name}")
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    if progress:
+        progress("done", "", total, total)
     return path
 
 
@@ -179,17 +196,18 @@ def apply_profile(
     selected_games: Optional[Iterable[str]] = None,
     log: Optional[Callable[[str], None]] = None,
     make_backup: bool = True,
+    progress: Optional[ProgressCb] = None,
 ) -> Dict[str, int]:
-    """Apply a saved profile. Returns per-game counts of files written.
-
-    If ``make_backup`` is true (default), a ``restore-<timestamp>.json`` snapshot
-    of the current configs is written next to the profile before any change.
-    """
+    """Apply a saved profile. Returns per-game counts of files written."""
     profile = load_profile(path)
     games_in_profile = profile.get("games", {})
     if selected_games is not None:
         wanted = set(selected_games)
         games_in_profile = {k: v for k, v in games_in_profile.items() if k in wanted}
+
+    total = len(games_in_profile)
+    if progress:
+        progress("start", "", 0, total)
 
     if make_backup and games_in_profile:
         backup = _build_backup({"games": games_in_profile})
@@ -197,24 +215,28 @@ def apply_profile(
         try:
             backup_path.write_text(json.dumps(backup, indent=2), encoding="utf-8")
             if log:
-                log(f"  backup written -> {backup_path.name}")
+                log(f"   backup written -> {backup_path.name}")
         except OSError as exc:
             if log:
-                log(f"  ! could not write backup: {exc}")
+                log(f"   ! could not write backup: {exc}")
 
     results: Dict[str, int] = {}
-    for game_key, payload in games_in_profile.items():
+    for index, (game_key, payload) in enumerate(games_in_profile.items(), start=1):
         files = payload.get("files", {})
         display = payload.get("display_name", game_key)
+        if progress:
+            progress("game", game_key, index, total)
         if log:
-            log(f"  applying {display} ({len(files)} file(s))...")
+            log(f"-> Applying {display} settings ({len(files)} file(s))...")
         try:
             written = games_mod.write_game_configs(game_key, files, log=log)
         except KeyError:
             if log:
-                log(f"  ! unknown game key '{game_key}' in profile, skipping")
+                log(f"   ! unknown game key '{game_key}' in profile, skipping")
             written = 0
         results[game_key] = written
         if log:
-            log(f"    wrote {written} file(s)")
+            log(f"   applied {written} file(s) to {display}")
+    if progress:
+        progress("done", "", total, total)
     return results

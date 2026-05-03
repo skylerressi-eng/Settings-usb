@@ -165,6 +165,7 @@ def read_game_configs(
 
     Reads from the first existing config root (per game). Keys are paths
     relative to that root, so apply can write them back into any matching root.
+    Each file is announced via ``log`` so the UI can show a play-by-play.
     """
     spec = GAMES.get(game_key)
     if spec is None:
@@ -179,10 +180,12 @@ def read_game_configs(
     for f in _collect_files(root, spec.file_globs, spec.max_files):
         try:
             rel = f.relative_to(root).as_posix()
+            if log:
+                log(f"     saving {rel}")
             contents[rel] = f.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             if log:
-                log(f"  ! could not read {f}: {exc}")
+                log(f"     ! could not read {rel}: {exc}")
     return contents
 
 
@@ -245,8 +248,10 @@ def write_game_configs(
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(text, encoding="utf-8")
+                if log:
+                    log(f"     applied {rel}")
                 written += 1
             except OSError as exc:
                 if log:
-                    log(f"  ! failed to write {dest}: {exc}")
+                    log(f"     ! failed to write {rel}: {exc}")
     return written
