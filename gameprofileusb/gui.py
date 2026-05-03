@@ -73,13 +73,14 @@ class GameRow(ctk.CTkFrame):
         ).grid(row=0, column=1, sticky="w", pady=(10, 0))
 
         path_text = str(game.config_paths[0])
-        if len(path_text) > 48:
-            path_text = "..." + path_text[-45:]
+        if len(path_text) > 38:
+            path_text = "..." + path_text[-35:]
         if len(game.config_paths) > 1:
-            path_text += f"  (+{len(game.config_paths) - 1} more)"
+            path_text += f"  +{len(game.config_paths) - 1}"
         ctk.CTkLabel(
             self, text=path_text, anchor="w",
-            text_color=DIM, font=ctk.CTkFont(size=10),
+            text_color=DIM, font=ctk.CTkFont(family="Consolas", size=10),
+            wraplength=180,
         ).grid(row=1, column=1, sticky="w", pady=(0, 10))
 
         text, fg, bg = STATUS_IDLE
@@ -108,8 +109,8 @@ class GameProfileUSBApp(ctk.CTk):
         ctk.set_default_color_theme("dark-blue")
 
         self.title("GameProfileUSB")
-        self.geometry("1240x820")
-        self.minsize(1080, 680)
+        self.geometry("1280x940")
+        self.minsize(1080, 760)
         self.configure(fg_color=BG)
 
         self.profile_dir_var = ctk.StringVar(
@@ -217,25 +218,31 @@ class GameProfileUSBApp(ctk.CTk):
 
     def _build_main(self) -> None:
         main = ctk.CTkFrame(self, fg_color="transparent")
-        main.grid(row=1, column=1, sticky="nsew", padx=18, pady=18)
+        main.grid(row=1, column=1, sticky="nsew", padx=14, pady=14)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(3, weight=1)
 
         self._build_profile_panel(main).grid(row=0, column=0, sticky="ew")
-        self._build_action_panel(main).grid(row=1, column=0, sticky="ew", pady=(16, 0))
-        self._build_converter(main).grid(row=2, column=0, sticky="ew", pady=(16, 0))
-        self._build_log(main).grid(row=3, column=0, sticky="nsew", pady=(16, 0))
+        self._build_action_panel(main).grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self._build_converter(main).grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self._build_log(main).grid(row=3, column=0, sticky="nsew", pady=(10, 0))
 
     def _section_header(self, parent, title: str, subtitle: str = "") -> None:
+        head = ctk.CTkFrame(parent, fg_color="transparent")
+        head.grid(row=0, column=0, columnspan=8, padx=14, pady=(12, 0), sticky="ew")
+        bar = ctk.CTkLabel(
+            head, text="", width=3, height=14, corner_radius=2, fg_color=ACCENT,
+        )
+        bar.grid(row=0, column=0, padx=(4, 8), pady=(2, 0))
         ctk.CTkLabel(
-            parent, text=title.upper(),
+            head, text=title.upper(),
             font=ctk.CTkFont(size=11, weight="bold"), text_color=ACCENT,
-        ).grid(row=0, column=0, columnspan=8, padx=18, pady=(14, 0), sticky="w")
+        ).grid(row=0, column=1, sticky="w")
         if subtitle:
             ctk.CTkLabel(
                 parent, text=subtitle, text_color=MUTED,
                 font=ctk.CTkFont(size=11),
-            ).grid(row=1, column=0, columnspan=8, padx=18, pady=(0, 6), sticky="w")
+            ).grid(row=1, column=0, columnspan=8, padx=22, pady=(0, 4), sticky="w")
 
     def _build_profile_panel(self, parent) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=14)
@@ -304,13 +311,18 @@ class GameProfileUSBApp(ctk.CTk):
         )
 
         meta_box = ctk.CTkFrame(frame, fg_color=PANEL_2, corner_radius=10)
-        meta_box.grid(row=5, column=0, columnspan=4, sticky="ew", padx=18, pady=(0, 14))
+        meta_box.grid(row=5, column=0, columnspan=4, sticky="ew", padx=14, pady=(2, 12))
+        ctk.CTkLabel(
+            meta_box, text="LOADED PROFILE",
+            text_color=DIM, font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(8, 0), anchor="w")
         self.profile_meta_label = ctk.CTkLabel(
             meta_box, text="No profile selected.",
             text_color=MUTED, anchor="w", justify="left",
             font=ctk.CTkFont(size=11),
         )
-        self.profile_meta_label.pack(fill="x", padx=12, pady=10, anchor="w")
+        self.profile_meta_label.pack(fill="x", padx=12, pady=(0, 8), anchor="w")
 
         return frame
 
@@ -320,52 +332,51 @@ class GameProfileUSBApp(ctk.CTk):
 
         self._section_header(frame, "Actions")
 
-        # Big "current action" hero label
         hero = ctk.CTkFrame(frame, fg_color=PANEL_2, corner_radius=12)
-        hero.grid(row=2, column=0, columnspan=2, sticky="ew", padx=18, pady=(4, 12))
+        hero.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(2, 8))
         hero.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             hero, text="CURRENT ACTION",
             text_color=DIM, font=ctk.CTkFont(size=10, weight="bold"),
-        ).grid(row=0, column=0, padx=14, pady=(10, 0), sticky="w")
+        ).grid(row=0, column=0, padx=14, pady=(8, 0), sticky="w")
         self.current_action_label = ctk.CTkLabel(
             hero, textvariable=self.current_action_var,
-            text_color=TEXT, font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=TEXT, font=ctk.CTkFont(size=15, weight="bold"),
             anchor="w",
         )
-        self.current_action_label.grid(row=1, column=0, padx=14, pady=(0, 8), sticky="ew")
+        self.current_action_label.grid(row=1, column=0, padx=14, pady=(0, 4), sticky="ew")
         self.progress = ctk.CTkProgressBar(
-            hero, height=8, corner_radius=4,
+            hero, height=6, corner_radius=3,
             fg_color=PANEL_HI, progress_color=ACCENT,
         )
-        self.progress.grid(row=2, column=0, padx=14, pady=(0, 14), sticky="ew")
+        self.progress.grid(row=2, column=0, padx=14, pady=(0, 10), sticky="ew")
         self.progress.set(0)
 
         btn_row = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_row.grid(row=3, column=0, columnspan=2, padx=18, pady=(0, 8), sticky="ew")
+        btn_row.grid(row=3, column=0, columnspan=2, padx=14, pady=(0, 6), sticky="ew")
         btn_row.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.save_btn = ctk.CTkButton(
-            btn_row, text="Save My Settings", height=48,
+            btn_row, text="Save My Settings", height=42,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=lambda: self._run_async(self._save_settings),
         )
         self.save_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
 
         self.apply_btn = ctk.CTkButton(
-            btn_row, text="Apply My Settings", height=48,
+            btn_row, text="Apply My Settings", height=42,
             fg_color=SUCCESS, hover_color=SUCCESS_HOVER,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=lambda: self._run_async(self._apply_settings),
         )
         self.apply_btn.grid(row=0, column=1, padx=6, sticky="ew")
 
         self.restore_btn = ctk.CTkButton(
-            btn_row, text="Restore Backup", height=48,
+            btn_row, text="Restore Backup", height=42,
             fg_color=WARN, hover_color="#c2820a",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=lambda: self._run_async(self._restore_backup),
         )
         self.restore_btn.grid(row=0, column=2, padx=(6, 0), sticky="ew")
@@ -374,8 +385,9 @@ class GameProfileUSBApp(ctk.CTk):
             frame, text="Auto-backup current configs before applying (recommended)",
             variable=self.backup_var,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            checkbox_width=18, checkbox_height=18,
-        ).grid(row=4, column=0, columnspan=2, padx=18, pady=(4, 14), sticky="w")
+            checkbox_width=16, checkbox_height=16,
+            font=ctk.CTkFont(size=11),
+        ).grid(row=4, column=0, columnspan=2, padx=18, pady=(2, 10), sticky="w")
 
         return frame
 
@@ -389,44 +401,44 @@ class GameProfileUSBApp(ctk.CTk):
         )
 
         ctk.CTkLabel(frame, text="Game", text_color=MUTED).grid(
-            row=2, column=0, padx=(18, 6), pady=8, sticky="e"
+            row=2, column=0, padx=(18, 6), pady=4, sticky="e"
         )
         self.game_select = ctk.CTkOptionMenu(
             frame, values=list(sens_mod.SUPPORTED_GAMES),
             fg_color=PANEL_2, button_color=ACCENT, button_hover_color=ACCENT_HOVER,
             text_color=TEXT,
         )
-        self.game_select.grid(row=2, column=1, pady=8, sticky="ew")
+        self.game_select.grid(row=2, column=1, pady=4, sticky="ew")
 
         ctk.CTkLabel(frame, text="DPI", text_color=MUTED).grid(
-            row=2, column=2, padx=(18, 6), pady=8, sticky="e"
+            row=2, column=2, padx=(18, 6), pady=4, sticky="e"
         )
-        self.dpi_entry = ctk.CTkEntry(frame, placeholder_text="800", height=32)
-        self.dpi_entry.grid(row=2, column=3, pady=8, sticky="ew")
+        self.dpi_entry = ctk.CTkEntry(frame, placeholder_text="800", height=30)
+        self.dpi_entry.grid(row=2, column=3, pady=4, sticky="ew")
 
         ctk.CTkLabel(frame, text="In-game sens", text_color=MUTED).grid(
-            row=2, column=4, padx=(18, 6), pady=8, sticky="e"
+            row=2, column=4, padx=(18, 6), pady=4, sticky="e"
         )
-        self.sens_entry = ctk.CTkEntry(frame, placeholder_text="0.4", height=32)
-        self.sens_entry.grid(row=2, column=5, padx=(0, 18), pady=8, sticky="ew")
+        self.sens_entry = ctk.CTkEntry(frame, placeholder_text="0.4", height=30)
+        self.sens_entry.grid(row=2, column=5, padx=(0, 18), pady=4, sticky="ew")
 
-        ctk.CTkLabel(frame, text="Controller (0-10)", text_color=MUTED).grid(
-            row=3, column=0, padx=(18, 6), pady=(8, 14), sticky="e"
+        ctk.CTkLabel(frame, text="Controller", text_color=MUTED).grid(
+            row=3, column=0, padx=(18, 6), pady=(4, 10), sticky="e"
         )
-        self.controller_entry = ctk.CTkEntry(frame, placeholder_text="result", height=32)
-        self.controller_entry.grid(row=3, column=1, pady=(8, 14), sticky="ew")
+        self.controller_entry = ctk.CTkEntry(frame, placeholder_text="0-10", height=30)
+        self.controller_entry.grid(row=3, column=1, pady=(4, 10), sticky="ew")
 
         ctk.CTkButton(
-            frame, text="Mouse -> Controller", height=34,
+            frame, text="Mouse -> Controller", height=30,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             command=self._convert_mouse_to_controller,
-        ).grid(row=3, column=2, columnspan=2, padx=8, pady=(8, 14), sticky="ew")
+        ).grid(row=3, column=2, columnspan=2, padx=8, pady=(4, 10), sticky="ew")
 
         ctk.CTkButton(
-            frame, text="Controller -> Mouse", height=34,
+            frame, text="Controller -> Mouse", height=30,
             fg_color=PANEL_2, hover_color=PANEL_HI,
             command=self._convert_controller_to_mouse,
-        ).grid(row=3, column=4, columnspan=2, padx=(8, 18), pady=(8, 14), sticky="ew")
+        ).grid(row=3, column=4, columnspan=2, padx=(8, 18), pady=(4, 10), sticky="ew")
 
         return frame
 
@@ -437,24 +449,20 @@ class GameProfileUSBApp(ctk.CTk):
 
         self._section_header(frame, "Activity log")
 
-        controls = ctk.CTkFrame(frame, fg_color="transparent")
-        controls.grid(row=2, column=0, sticky="nsew", padx=12, pady=(4, 12))
-        controls.grid_columnconfigure(0, weight=1)
-        controls.grid_rowconfigure(0, weight=1)
+        clear_btn = ctk.CTkButton(
+            frame, text="Clear log", width=80, height=24,
+            fg_color=PANEL_2, hover_color=PANEL_HI,
+            font=ctk.CTkFont(size=11), command=self._clear_log,
+        )
+        clear_btn.place(relx=1.0, x=-18, y=10, anchor="ne")
 
         self.log_box = ctk.CTkTextbox(
-            controls, fg_color=PANEL_2, text_color="#d8dbe2",
-            font=ctk.CTkFont(family="Consolas", size=12), corner_radius=10,
+            frame, fg_color=PANEL_2, text_color="#d8dbe2",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            corner_radius=10, height=180,
         )
-        self.log_box.grid(row=0, column=0, sticky="nsew")
+        self.log_box.grid(row=2, column=0, sticky="nsew", padx=14, pady=(4, 12))
         self.log_box.configure(state="disabled")
-
-        clear_btn = ctk.CTkButton(
-            controls, text="Clear log", width=90, height=28,
-            fg_color=PANEL_2, hover_color=PANEL_HI,
-            command=self._clear_log,
-        )
-        clear_btn.grid(row=1, column=0, sticky="e", pady=(8, 0))
 
         return frame
 
@@ -677,29 +685,30 @@ class GameProfileUSBApp(ctk.CTk):
         self._set_progress(1.0 if ok else 0.0)
 
     def _make_progress_cb(self, verb: str):
+        # Track the in-flight game ourselves rather than reading the widget,
+        # because widget updates are queued via after(0,...) and may not have
+        # applied by the time the next progress event fires.
+        last_key: List[Optional[str]] = [None]
+
         def cb(stage: str, key: str, index: int, total: int) -> None:
             if stage == "start":
                 self._set_action(f"{verb} {total} game(s)...")
                 self._set_progress(0.0)
+                last_key[0] = None
             elif stage == "game":
+                if last_key[0] is not None:
+                    self._set_row_status(last_key[0], "done")
                 spec = games_mod.GAMES.get(key)
                 name = spec.display_name if spec else key
                 self._set_action(f"{verb} {name}...   ({index} of {total})")
                 self._set_progress((index - 1) / max(total, 1))
                 self._set_row_status(key, "busy")
-                # Mark previously processed games as done.
-                for k in list(self.game_rows.keys()):
-                    if k == key:
-                        continue
-                    row = self.game_rows[k]
-                    if row.status_badge.cget("text") == STATUS_BUSY[0]:
-                        self._set_row_status(k, "done")
+                last_key[0] = key
             elif stage == "done":
                 self._set_progress(1.0)
-                # Last in-flight game gets marked done.
-                for k, row in self.game_rows.items():
-                    if row.status_badge.cget("text") == STATUS_BUSY[0]:
-                        self._set_row_status(k, "done")
+                if last_key[0] is not None:
+                    self._set_row_status(last_key[0], "done")
+                    last_key[0] = None
         return cb
 
     def _current_profile_path(self) -> Optional[Path]:
