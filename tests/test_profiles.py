@@ -143,6 +143,83 @@ class GamesIOTests(unittest.TestCase):
         self.assertIn("saving GameUserSettings.ini", joined)
         self.assertIn("captured 1 file(s) from Valorant", joined)
 
+    def test_restore_backup_undoes_apply(self):
+        # Save a profile from machine A (val + cs2)
+        profile_path = self.root / "out" / "main.json"
+        profiles_mod.save_profile(profile_path, selected_games=["valorant", "cs2"])
+
+        # Simulate a fresh PC by changing the on-disk content.
+        (self.valorant_root / "GameUserSettings.ini").write_text("local-original\n")
+        (self.cs2_user_a / "video.txt").write_text("local-A\n")
+        (self.cs2_user_b / "video.txt").write_text("local-B\n")
+
+        # Apply (with backup), proving overwrite happened.
+        profiles_mod.apply_profile(profile_path, make_backup=True)
+        self.assertEqual(
+            (self.cs2_user_a / "video.txt").read_text(), "user-A original\n"
+        )
+
+        # Restore from the backup file.
+        backups = profiles_mod.list_backups(profile_path.parent)
+        self.assertEqual(len(backups), 1)
+        results = profiles_mod.restore_backup(backups[0])
+        self.assertGreater(sum(results.values()), 0)
+
+        # Local content is back.
+        self.assertEqual(
+            (self.cs2_user_a / "video.txt").read_text(), "local-A\n"
+        )
+        self.assertEqual(
+            (self.cs2_user_b / "video.txt").read_text(), "local-B\n"
+        )
+        self.assertEqual(
+            (self.valorant_root / "GameUserSettings.ini").read_text(),
+            "local-original\n",
+        )
+
+    def test_restore_deletes_files_apply_created(self):
+        # Profile contains a brand-new file that doesn't exist locally yet.
+        profile_path = self.root / "out" / "novel.json"
+        # Manually craft a profile with a file that's not in the source root.
+        (self.valorant_root / "Brand-new.ini").write_text("from-source\n")
+        profiles_mod.save_profile(profile_path, selected_games=["valorant"])
+        (self.valorant_root / "Brand-new.ini").unlink()  # gone on this PC
+
+        self.assertFalse((self.valorant_root / "Brand-new.ini").exists())
+        profiles_mod.apply_profile(profile_path, make_backup=True)
+        self.assertTrue((self.valorant_root / "Brand-new.ini").exists())
+
+        backups = profiles_mod.list_backups(profile_path.parent)
+        profiles_mod.restore_backup(backups[0])
+
+        # Restore deleted the file apply created.
+        self.assertFalse((self.valorant_root / "Brand-new.ini").exists())
+
+    def test_restore_rejects_non_backup_file(self):
+        profile_path = self.root / "out" / "regular.json"
+        profiles_mod.save_profile(profile_path, selected_games=["valorant"])
+        with self.assertRaises(ValueError):
+            profiles_mod.restore_backup(profile_path)
+
+    def test_is_backup_and_list_backups(self):
+        profile_path = self.root / "out" / "main.json"
+        profiles_mod.save_profile(profile_path, selected_games=["valorant"])
+        profiles_mod.apply_profile(profile_path, make_backup=True)
+
+        regular = profile_path
+        backups = profiles_mod.list_backups(profile_path.parent)
+        self.assertFalse(profiles_mod.is_backup(regular))
+        self.assertTrue(profiles_mod.is_backup(backups[0]))
+
+    def test_delete_profile(self):
+        profile_path = self.root / "out" / "doomed.json"
+        profiles_mod.save_profile(profile_path, selected_games=["valorant"])
+        self.assertTrue(profile_path.exists())
+        profiles_mod.delete_profile(profile_path)
+        self.assertFalse(profile_path.exists())
+        # Deleting a non-existent file is a no-op.
+        profiles_mod.delete_profile(profile_path)
+
     def test_apply_progress_and_log(self):
         profile_path = self.root / "out" / "applylog.json"
         profiles_mod.save_profile(profile_path, selected_games=["valorant"])

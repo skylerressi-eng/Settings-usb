@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Dict, List, Optional
 
 import customtkinter as ctk
@@ -125,7 +128,16 @@ class GameProfileUSBApp(ctk.CTk):
         self._build_layout()
         self._refresh_games()
         self._refresh_profiles()
+        self.bind("<FocusIn>", self._on_focus)
+        self.bind("<Control-s>", lambda _e: self._run_async(self._save_settings))
+        self.bind("<Control-r>", lambda _e: self._refresh_games())
         self.log("Ready. Pick a USB folder, choose your games, then Save or Apply.")
+        self.log("Tip: Ctrl+S = save, Ctrl+R = re-scan games.")
+
+    def _on_focus(self, event) -> None:
+        # Only refresh on top-level focus, not every internal widget focus.
+        if event.widget is self:
+            self._refresh_drives()
 
     # ---------------- layout ----------------
     def _build_layout(self) -> None:
@@ -247,10 +259,16 @@ class GameProfileUSBApp(ctk.CTk):
         ctk.CTkEntry(frame, textvariable=self.profile_dir_var, height=32).grid(
             row=2, column=2, sticky="ew", padx=8, pady=4
         )
+        folder_btns = ctk.CTkFrame(frame, fg_color="transparent")
+        folder_btns.grid(row=2, column=3, padx=(0, 18), pady=4)
         ctk.CTkButton(
-            frame, text="Browse", width=90, height=32, command=self._pick_folder,
+            folder_btns, text="Browse", width=80, height=32, command=self._pick_folder,
             fg_color=PANEL_2, hover_color=PANEL_HI,
-        ).grid(row=2, column=3, padx=(0, 18), pady=4)
+        ).grid(row=0, column=0, padx=(0, 4))
+        ctk.CTkButton(
+            folder_btns, text="Open", width=60, height=32, command=self._open_folder,
+            fg_color=PANEL_2, hover_color=PANEL_HI,
+        ).grid(row=0, column=1)
 
         ctk.CTkLabel(frame, text="Profile", width=70, anchor="w", text_color=MUTED).grid(
             row=3, column=0, padx=(18, 6), pady=4, sticky="w"
@@ -262,10 +280,18 @@ class GameProfileUSBApp(ctk.CTk):
             text_color=TEXT,
         )
         self.profile_select.grid(row=3, column=1, columnspan=2, sticky="ew", pady=4)
+        prof_btns = ctk.CTkFrame(frame, fg_color="transparent")
+        prof_btns.grid(row=3, column=3, padx=(0, 18), pady=4)
         ctk.CTkButton(
-            frame, text="Refresh", width=90, height=32, command=self._refresh_profiles,
+            prof_btns, text="Refresh", width=80, height=32,
+            command=self._refresh_profiles,
             fg_color=PANEL_2, hover_color=PANEL_HI,
-        ).grid(row=3, column=3, padx=(0, 18), pady=4)
+        ).grid(row=0, column=0, padx=(0, 4))
+        ctk.CTkButton(
+            prof_btns, text="Delete", width=60, height=32,
+            command=self._delete_profile,
+            fg_color="#3a1414", hover_color="#5a1818", text_color="#fecaca",
+        ).grid(row=0, column=1)
 
         ctk.CTkLabel(frame, text="Save as", width=70, anchor="w", text_color=MUTED).grid(
             row=4, column=0, padx=(18, 6), pady=(4, 12), sticky="w"
@@ -316,28 +342,40 @@ class GameProfileUSBApp(ctk.CTk):
         self.progress.grid(row=2, column=0, padx=14, pady=(0, 14), sticky="ew")
         self.progress.set(0)
 
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.grid(row=3, column=0, columnspan=2, padx=18, pady=(0, 8), sticky="ew")
+        btn_row.grid_columnconfigure((0, 1, 2), weight=1)
+
         self.save_btn = ctk.CTkButton(
-            frame, text="Save My Settings", height=48,
+            btn_row, text="Save My Settings", height=48,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=lambda: self._run_async(self._save_settings),
         )
-        self.save_btn.grid(row=3, column=0, padx=(18, 8), pady=(0, 8), sticky="ew")
+        self.save_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
 
         self.apply_btn = ctk.CTkButton(
-            frame, text="Apply My Settings", height=48,
+            btn_row, text="Apply My Settings", height=48,
             fg_color=SUCCESS, hover_color=SUCCESS_HOVER,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=lambda: self._run_async(self._apply_settings),
         )
-        self.apply_btn.grid(row=3, column=1, padx=(8, 18), pady=(0, 8), sticky="ew")
+        self.apply_btn.grid(row=0, column=1, padx=6, sticky="ew")
+
+        self.restore_btn = ctk.CTkButton(
+            btn_row, text="Restore Backup", height=48,
+            fg_color=WARN, hover_color="#c2820a",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda: self._run_async(self._restore_backup),
+        )
+        self.restore_btn.grid(row=0, column=2, padx=(6, 0), sticky="ew")
 
         ctk.CTkCheckBox(
-            frame, text="Backup current configs before applying",
+            frame, text="Auto-backup current configs before applying (recommended)",
             variable=self.backup_var,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             checkbox_width=18, checkbox_height=18,
-        ).grid(row=4, column=0, columnspan=2, padx=18, pady=(0, 14), sticky="w")
+        ).grid(row=4, column=0, columnspan=2, padx=18, pady=(4, 14), sticky="w")
 
         return frame
 
@@ -463,6 +501,7 @@ class GameProfileUSBApp(ctk.CTk):
         def _do() -> None:
             self.save_btn.configure(state=state)
             self.apply_btn.configure(state=state)
+            self.restore_btn.configure(state=state)
         self.after(0, _do)
 
     def _set_row_status(self, key: str, kind: str) -> None:
@@ -573,6 +612,48 @@ class GameProfileUSBApp(ctk.CTk):
             self.profile_dir_var.set(chosen)
             self._refresh_profiles()
 
+    def _open_folder(self) -> None:
+        folder = Path(self.profile_dir_var.get())
+        if not folder.exists():
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                self.log(f"ERROR: cannot create {folder}: {exc}")
+                return
+        try:
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif system == "Darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except OSError as exc:
+            self.log(f"ERROR: could not open folder: {exc}")
+
+    def _delete_profile(self) -> None:
+        folder = Path(self.profile_dir_var.get())
+        name = self.selected_profile_var.get()
+        if not name or name == "(no profiles yet)":
+            self.log("ERROR: no profile selected to delete.")
+            return
+        path = folder / name
+        if not messagebox.askyesno(
+            "Delete profile",
+            f"Permanently delete '{name}'?\n\n{path}\n\nThis cannot be undone.",
+        ):
+            return
+        try:
+            profiles_mod.delete_profile(path)
+            self.log(f"Deleted profile: {name}")
+            self.selected_profile_var.set("")
+            self._refresh_profiles()
+        except OSError as exc:
+            self.log(f"ERROR: could not delete profile: {exc}")
+
+    def _refresh_drives(self) -> None:
+        self.drive_select.configure(values=self._drive_options())
+
     def _run_async(self, func) -> None:
         if self._busy:
             self.log("ERROR: another operation is already running.")
@@ -679,6 +760,44 @@ class GameProfileUSBApp(ctk.CTk):
         except Exception as exc:  # noqa: BLE001
             self.log(f"ERROR while applying: {exc}")
             self._end_op(f"Apply failed: {exc}", ok=False)
+
+    def _restore_backup(self) -> None:
+        folder = Path(self.profile_dir_var.get())
+        name = self.selected_profile_var.get()
+        path: Optional[Path] = None
+        if name and name != "(no profiles yet)" and (folder / name).exists():
+            candidate = folder / name
+            if profiles_mod.is_backup(candidate):
+                path = candidate
+        if path is None:
+            backups = profiles_mod.list_backups(folder)
+            if not backups:
+                self.log("ERROR: no restore-*.json backups found in this folder.")
+                return
+            path = backups[0]
+            self.log(f"Using newest backup: {path.name}")
+
+        if not messagebox.askyesno(
+            "Restore backup",
+            f"Restore configs from:\n{path.name}\n\n"
+            "This will overwrite current settings (and delete files\n"
+            "the most recent apply created). Continue?",
+        ):
+            return
+
+        self._begin_op("Restoring backup...")
+        self.log(f"Restoring backup from {path}")
+        try:
+            results = profiles_mod.restore_backup(
+                path, log=self.log,
+                progress=self._make_progress_cb("Restoring"),
+            )
+            total = sum(results.values())
+            self.log(f"OK  -  Restored {total} file(s) across {len(results)} game(s).")
+            self._end_op(f"Restored {total} file(s) from {path.name}", ok=True)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"ERROR while restoring: {exc}")
+            self._end_op(f"Restore failed: {exc}", ok=False)
 
     # ---------------- converter ----------------
     def _read_dpi_sens(self):

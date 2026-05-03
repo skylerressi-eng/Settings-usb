@@ -240,3 +240,65 @@ def apply_profile(
     if progress:
         progress("done", "", total, total)
     return results
+
+
+BACKUP_KIND = "auto-restore-snapshot"
+
+
+def is_backup(path: Path) -> bool:
+    try:
+        data = load_profile(path)
+    except (OSError, ValueError):
+        return False
+    return data.get("kind") == BACKUP_KIND
+
+
+def list_backups(folder: Path) -> List[Path]:
+    """All restore-*.json files in the folder, newest first by name."""
+    folder = Path(folder)
+    if not folder.exists():
+        return []
+    return sorted(folder.glob("restore-*.json"), reverse=True)
+
+
+def restore_backup(
+    path: Path,
+    log: Optional[Callable[[str], None]] = None,
+    progress: Optional[ProgressCb] = None,
+) -> Dict[str, int]:
+    """Restore a previously-made backup snapshot, undoing an apply."""
+    data = load_profile(path)
+    if data.get("kind") != BACKUP_KIND:
+        raise ValueError(f"{path.name} is not a backup snapshot")
+
+    games_block = data.get("games", {})
+    total = len(games_block)
+    if progress:
+        progress("start", "", 0, total)
+
+    results: Dict[str, int] = {}
+    for index, (game_key, payload) in enumerate(games_block.items(), start=1):
+        display = payload.get("display_name", game_key)
+        snapshots = payload.get("snapshots", {})
+        if progress:
+            progress("game", game_key, index, total)
+        if log:
+            log(f"-> Restoring {display} from backup...")
+        try:
+            count = games_mod.restore_snapshot(game_key, snapshots, log=log)
+        except KeyError:
+            if log:
+                log(f"   ! unknown game key '{game_key}', skipping")
+            count = 0
+        results[game_key] = count
+        if log:
+            log(f"   restored {count} file(s) for {display}")
+    if progress:
+        progress("done", "", total, total)
+    return results
+
+
+def delete_profile(path: Path) -> None:
+    p = Path(path)
+    if p.exists():
+        p.unlink()

@@ -193,21 +193,22 @@ def snapshot_current_configs(
     game_key: str,
     rel_paths: List[str],
     log: Optional[Callable[[str], None]] = None,
-) -> Dict[str, Dict[str, str]]:
+) -> Dict[str, Dict[str, Optional[str]]]:
     """Snapshot currently-installed files at the given relative paths.
 
-    Returns ``{root_str: {rel_path: text}}``. Used to back up before apply.
-    Missing files are simply omitted (so restore knows to delete them again).
+    Returns ``{root_str: {rel_path: text_or_None}}``. ``None`` means the file
+    did not exist before apply, so restore knows to delete the file the apply
+    created. Used to back up before apply.
     """
     spec = GAMES.get(game_key)
     if spec is None:
         raise KeyError(game_key)
 
-    snap: Dict[str, Dict[str, str]] = {}
+    snap: Dict[str, Dict[str, Optional[str]]] = {}
     for root in spec.path_resolver():
         if not root.exists():
             continue
-        per_root: Dict[str, str] = {}
+        per_root: Dict[str, Optional[str]] = {}
         for rel in rel_paths:
             target = root / rel
             if target.is_file():
@@ -218,8 +219,65 @@ def snapshot_current_configs(
                 except OSError as exc:
                     if log:
                         log(f"  ! could not snapshot {target}: {exc}")
+            else:
+                per_root[rel] = None
         snap[str(root)] = per_root
     return snap
+
+
+def restore_snapshot(
+    game_key: str,
+    snapshots: Dict[str, Dict[str, Optional[str]]],
+    log: Optional[Callable[[str], None]] = None,
+) -> int:
+    """Restore a per-root snapshot. Writes back original contents, and deletes
+    any files whose snapshot entry is ``None`` (those didn't exist pre-apply).
+
+    Returns the count of files written + deleted.
+    """
+    spec = GAMES.get(game_key)
+    if spec is None:
+        raise KeyError(game_key)
+
+    detected = [p for p in spec.path_resolver() if p.exists()]
+    detected_strs = {str(p) for p in detected}
+
+    touched = 0
+    for root_str, files in snapshots.items():
+        root = Path(root_str)
+        # If the original root no longer exists (different PC), fall back to
+        # whatever roots the game has on this PC.
+        if root_str in detected_strs and root.exists():
+            targets = [root]
+        else:
+            targets = detected
+            if log and targets:
+                log(f"     original root missing, restoring to detected root(s)")
+        if not targets:
+            if log:
+                log(f"     ! no install location, cannot restore {root_str}")
+            continue
+
+        for tgt in targets:
+            for rel, text in files.items():
+                dest = tgt / rel
+                try:
+                    if text is None:
+                        if dest.exists():
+                            dest.unlink()
+                            if log:
+                                log(f"     deleted {rel}")
+                            touched += 1
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_text(text, encoding="utf-8")
+                        if log:
+                            log(f"     restored {rel}")
+                        touched += 1
+                except OSError as exc:
+                    if log:
+                        log(f"     ! failed to restore {rel}: {exc}")
+    return touched
 
 
 def write_game_configs(
