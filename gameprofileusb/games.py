@@ -1,9 +1,13 @@
 """Game detection and config file collection.
 
-Each game is described by a list of candidate paths (with glob support) under
-common Windows user folders. ``detect_games`` returns the games whose config
-locations exist on this machine; ``read_game_configs`` loads the file contents
-so they can be serialized into a profile.
+Each game is described by a list of candidate config-root paths under common
+user folders. ``detect_games`` returns the games whose roots exist on this
+machine. ``read_game_configs`` loads files from the first existing root.
+``write_game_configs`` writes the saved files back to *every* existing root
+(so e.g. CS2 settings get applied to every Steam user on the target PC).
+
+File contents are stored in the profile keyed by the path relative to the
+config root, so save and apply stay symmetric without prefix tricks.
 """
 
 from __future__ import annotations
@@ -13,6 +17,11 @@ from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+# Skip individual files larger than this (keeps the JSON profile portable).
+MAX_FILE_BYTES = 1_000_000
+# Hard cap on number of files captured per game.
+DEFAULT_MAX_FILES = 80
 
 
 def _home() -> Path:
@@ -30,7 +39,11 @@ def _appdata_roaming() -> Path:
 def _documents() -> Path:
     docs = _home() / "Documents"
     onedrive = _home() / "OneDrive" / "Documents"
-    return onedrive if onedrive.exists() and not docs.exists() else docs
+    if docs.exists():
+        return docs
+    if onedrive.exists():
+        return onedrive
+    return docs
 
 
 def _steam_userdata_candidates() -> List[Path]:
@@ -49,7 +62,7 @@ class GameSpec:
     display_name: str
     path_resolver: Callable[[], List[Path]]
     file_globs: List[str] = field(default_factory=lambda: ["**/*"])
-    max_files: int = 50
+    max_files: int = DEFAULT_MAX_FILES
 
 
 def _valorant_paths() -> List[Path]:
@@ -129,12 +142,18 @@ def detect_games() -> List[DetectedGame]:
 def _collect_files(root: Path, patterns: List[str], cap: int) -> List[Path]:
     seen: List[Path] = []
     for pattern in patterns:
-        for match in glob(str(root / pattern), recursive=True):
+        for match in sorted(glob(str(root / pattern), recursive=True)):
             p = Path(match)
-            if p.is_file() and p not in seen:
-                seen.append(p)
-                if len(seen) >= cap:
-                    return seen
+            if not p.is_file() or p in seen:
+                continue
+            try:
+                if p.stat().st_size > MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            seen.append(p)
+            if len(seen) >= cap:
+                return seen
     return seen
 
 
@@ -142,26 +161,62 @@ def read_game_configs(
     game_key: str,
     log: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, str]:
-    """Return a {relative_path: text_content} map for the given game."""
+    """Return a {relative_path: text_content} map for the given game.
+
+    Reads from the first existing config root (per game). Keys are paths
+    relative to that root, so apply can write them back into any matching root.
+    """
     spec = GAMES.get(game_key)
     if spec is None:
         raise KeyError(game_key)
 
     contents: Dict[str, str] = {}
+    roots = [r for r in spec.path_resolver() if r.exists()]
+    if not roots:
+        return contents
+    root = roots[0]
+
+    for f in _collect_files(root, spec.file_globs, spec.max_files):
+        try:
+            rel = f.relative_to(root).as_posix()
+            contents[rel] = f.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            if log:
+                log(f"  ! could not read {f}: {exc}")
+    return contents
+
+
+def snapshot_current_configs(
+    game_key: str,
+    rel_paths: List[str],
+    log: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Snapshot currently-installed files at the given relative paths.
+
+    Returns ``{root_str: {rel_path: text}}``. Used to back up before apply.
+    Missing files are simply omitted (so restore knows to delete them again).
+    """
+    spec = GAMES.get(game_key)
+    if spec is None:
+        raise KeyError(game_key)
+
+    snap: Dict[str, Dict[str, str]] = {}
     for root in spec.path_resolver():
         if not root.exists():
             continue
-        files = _collect_files(root, spec.file_globs, spec.max_files)
-        for f in files:
-            try:
-                rel = f.relative_to(root).as_posix()
-                contents[f"{root.name}/{rel}"] = f.read_text(
-                    encoding="utf-8", errors="replace"
-                )
-            except OSError as exc:
-                if log:
-                    log(f"  ! could not read {f}: {exc}")
-    return contents
+        per_root: Dict[str, str] = {}
+        for rel in rel_paths:
+            target = root / rel
+            if target.is_file():
+                try:
+                    per_root[rel] = target.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                except OSError as exc:
+                    if log:
+                        log(f"  ! could not snapshot {target}: {exc}")
+        snap[str(root)] = per_root
+    return snap
 
 
 def write_game_configs(
@@ -169,7 +224,10 @@ def write_game_configs(
     files: Dict[str, str],
     log: Optional[Callable[[str], None]] = None,
 ) -> int:
-    """Write previously-saved configs back to the first existing target root."""
+    """Write the saved files into *every* existing config root.
+
+    Returns the total number of files written across all roots.
+    """
     spec = GAMES.get(game_key)
     if spec is None:
         raise KeyError(game_key)
@@ -179,16 +237,16 @@ def write_game_configs(
         if log:
             log(f"  ! no install location for {spec.display_name}, skipping")
         return 0
-    target_root = targets[0].parent
 
     written = 0
-    for rel, text in files.items():
-        dest = target_root / rel
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text, encoding="utf-8")
-            written += 1
-        except OSError as exc:
-            if log:
-                log(f"  ! failed to write {dest}: {exc}")
+    for root in targets:
+        for rel, text in files.items():
+            dest = root / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(text, encoding="utf-8")
+                written += 1
+            except OSError as exc:
+                if log:
+                    log(f"  ! failed to write {dest}: {exc}")
     return written

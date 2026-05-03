@@ -1,18 +1,26 @@
-"""Profile load/save to a JSON file on a USB drive (or any chosen folder)."""
+"""Profile load/save to a JSON file on a regular USB drive (or any folder).
+
+A "profile" is a single JSON file. Multiple named profiles can live side by
+side in the same folder; the GUI lists every ``*.json`` profile it finds.
+Before any apply, the current on-disk configs are snapshotted to a sibling
+``restore-<timestamp>.json`` so the user can roll back.
+"""
 
 from __future__ import annotations
 
 import json
 import platform
+import re
 import string
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from . import games as games_mod
 
-PROFILE_FILENAME = "gameprofileusb_profile.json"
-PROFILE_VERSION = 1
+PROFILE_GLOB = "*.json"
+PROFILE_VERSION = 2
+DEFAULT_PROFILE_NAME = "my-profile"
 
 
 def list_removable_drives() -> List[Path]:
@@ -21,58 +29,99 @@ def list_removable_drives() -> List[Path]:
     candidates: List[Path] = []
 
     if system == "Windows":
-        import ctypes
+        try:
+            import ctypes
 
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-        DRIVE_REMOVABLE = 2
-        for i, letter in enumerate(string.ascii_uppercase):
-            if not (bitmask >> i) & 1:
-                continue
-            root = f"{letter}:\\"
-            if ctypes.windll.kernel32.GetDriveTypeW(root) == DRIVE_REMOVABLE:
-                candidates.append(Path(root))
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            DRIVE_REMOVABLE = 2
+            for i, letter in enumerate(string.ascii_uppercase):
+                if not (bitmask >> i) & 1:
+                    continue
+                root = f"{letter}:\\"
+                if ctypes.windll.kernel32.GetDriveTypeW(root) == DRIVE_REMOVABLE:
+                    candidates.append(Path(root))
+        except (OSError, AttributeError):
+            pass
     elif system == "Darwin":
         vol = Path("/Volumes")
         if vol.exists():
             candidates.extend(p for p in vol.iterdir() if p.is_dir())
     else:
-        for base in (Path("/media") / Path.home().name, Path("/run/media") / Path.home().name, Path("/mnt")):
+        user = Path.home().name
+        for base in (
+            Path("/media") / user,
+            Path("/run/media") / user,
+            Path("/media"),
+            Path("/mnt"),
+        ):
             if base.exists():
                 candidates.extend(p for p in base.iterdir() if p.is_dir())
 
-    return candidates
+    # de-dupe while preserving order
+    seen: List[Path] = []
+    for c in candidates:
+        if c not in seen:
+            seen.append(c)
+    return seen
 
 
-def default_profile_path() -> Path:
+def default_profile_dir() -> Path:
     drives = list_removable_drives()
     if drives:
-        return drives[0] / PROFILE_FILENAME
-    return Path.home() / PROFILE_FILENAME
+        return drives[0] / "GameProfileUSB"
+    return Path.home() / "GameProfileUSB"
+
+
+def list_profiles(folder: Path) -> List[Path]:
+    folder = Path(folder)
+    if not folder.exists():
+        return []
+    return sorted(p for p in folder.glob(PROFILE_GLOB) if p.is_file())
+
+
+def _safe_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()) or DEFAULT_PROFILE_NAME
+    return cleaned[:64]
+
+
+def profile_path(folder: Path, name: str) -> Path:
+    name = _safe_name(name)
+    if not name.endswith(".json"):
+        name += ".json"
+    return Path(folder) / name
 
 
 def save_profile(
     path: Path,
+    selected_games: Optional[Iterable[str]] = None,
     log: Optional[Callable[[str], None]] = None,
 ) -> Path:
-    """Read all detected games' configs and save them to a JSON profile."""
+    """Read selected (or all detected) games' configs and save a JSON profile."""
     detected = games_mod.detect_games()
-    profile: Dict[str, dict] = {
+    if selected_games is not None:
+        wanted = set(selected_games)
+        detected = [g for g in detected if g.key in wanted]
+
+    profile: Dict[str, object] = {
         "version": PROFILE_VERSION,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "host": platform.node(),
         "games": {},
     }
+    games_block: Dict[str, dict] = profile["games"]  # type: ignore[assignment]
+
     for game in detected:
         if log:
             log(f"  reading {game.display_name}...")
         files = games_mod.read_game_configs(game.key, log=log)
-        profile["games"][game.key] = {
+        games_block[game.key] = {
             "display_name": game.display_name,
             "files": files,
         }
         if log:
             log(f"    captured {len(files)} file(s)")
 
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
     return path
@@ -82,14 +131,79 @@ def load_profile(path: Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def profile_summary(path: Path) -> Dict[str, object]:
+    """Lightweight summary used by the GUI without loading every byte twice."""
+    data = load_profile(path)
+    games = data.get("games", {})
+    return {
+        "saved_at": data.get("saved_at", "unknown"),
+        "host": data.get("host", "unknown"),
+        "version": data.get("version", "?"),
+        "game_counts": {
+            key: len(payload.get("files", {}))
+            for key, payload in games.items()
+        },
+    }
+
+
+def _backup_path(profile: Path) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Path(profile).parent / f"restore-{stamp}.json"
+
+
+def _build_backup(profile_data: dict) -> dict:
+    backup: Dict[str, object] = {
+        "version": PROFILE_VERSION,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "host": platform.node(),
+        "kind": "auto-restore-snapshot",
+        "games": {},
+    }
+    games_block: Dict[str, dict] = backup["games"]  # type: ignore[assignment]
+    for key, payload in profile_data.get("games", {}).items():
+        rels = list(payload.get("files", {}).keys())
+        try:
+            snap = games_mod.snapshot_current_configs(key, rels)
+        except KeyError:
+            continue
+        # Flatten: store one snapshot per existing root.
+        games_block[key] = {
+            "display_name": payload.get("display_name", key),
+            "snapshots": snap,
+        }
+    return backup
+
+
 def apply_profile(
     path: Path,
+    selected_games: Optional[Iterable[str]] = None,
     log: Optional[Callable[[str], None]] = None,
+    make_backup: bool = True,
 ) -> Dict[str, int]:
-    """Apply a previously-saved profile to this PC. Returns per-game write counts."""
+    """Apply a saved profile. Returns per-game counts of files written.
+
+    If ``make_backup`` is true (default), a ``restore-<timestamp>.json`` snapshot
+    of the current configs is written next to the profile before any change.
+    """
     profile = load_profile(path)
+    games_in_profile = profile.get("games", {})
+    if selected_games is not None:
+        wanted = set(selected_games)
+        games_in_profile = {k: v for k, v in games_in_profile.items() if k in wanted}
+
+    if make_backup and games_in_profile:
+        backup = _build_backup({"games": games_in_profile})
+        backup_path = _backup_path(path)
+        try:
+            backup_path.write_text(json.dumps(backup, indent=2), encoding="utf-8")
+            if log:
+                log(f"  backup written -> {backup_path.name}")
+        except OSError as exc:
+            if log:
+                log(f"  ! could not write backup: {exc}")
+
     results: Dict[str, int] = {}
-    for game_key, payload in profile.get("games", {}).items():
+    for game_key, payload in games_in_profile.items():
         files = payload.get("files", {})
         display = payload.get("display_name", game_key)
         if log:
